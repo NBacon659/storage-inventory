@@ -44,6 +44,7 @@
     deletePhoto: id => tx("photos", "readwrite", s => s.delete(id)),
     getLookup: upc => tx("lookups", "readonly", s => s.get(upc)),
     putLookup: rec => tx("lookups", "readwrite", s => s.put(rec)),
+    clearLookups: () => tx("lookups", "readwrite", s => s.clear()),
     async clearAll() {
       await tx("items", "readwrite", s => s.clear());
       await tx("photos", "readwrite", s => s.clear());

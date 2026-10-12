@@ -1,6 +1,6 @@
 /* Live camera scanning (viewfinder + worker decode) and single-photo decoding. */
 (function () {
-  let stream = null, video = null, worker = null, running = false, inFlight = false;
+  let stream = null, video = null, worker = null, running = false, paused = false, inFlight = false;
   let frame = 0, reqId = 0, onCodeCb = null, reticleEl = null, timer = null;
   const pending = new Map(); // reqId -> resolve, for photo decodes
   const canvas = document.createElement("canvas");
@@ -13,9 +13,10 @@
       const m = e.data;
       if (pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); return; }
       inFlight = false;
-      if (running && m.text && onCodeCb) onCodeCb(m.text, m.format);
+      // report every frame, empty ones too, so the app can tell when a barcode has left the view
+      if (running && !paused && onCodeCb) onCodeCb(m.hits || []);
     };
-    worker.onerror = () => { inFlight = false; for (const [, r] of pending) r({ text: null }); pending.clear(); };
+    worker.onerror = () => { inFlight = false; for (const [, r] of pending) r({ hits: [] }); pending.clear(); };
     return worker;
   }
   function decodeImageData(id, buf, w, h) {
@@ -46,7 +47,7 @@
 
   function tick() {
     if (!running) return;
-    if (!inFlight && video.readyState >= 2 && video.videoWidth) {
+    if (!paused && !inFlight && video.readyState >= 2 && video.videoWidth) {
       frame++;
       const vw = video.videoWidth, vh = video.videoHeight;
       // most frames: the box on screen; every 4th: most of the frame, for barcodes held off-center or sideways
@@ -76,7 +77,7 @@
       const caps = track.getCapabilities ? track.getCapabilities() : {};
       if (caps.focusMode && caps.focusMode.includes("continuous")) await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
     } catch (e) {}
-    running = true; inFlight = false; frame = 0;
+    running = true; paused = false; inFlight = false; frame = 0;
     tick();
     return { torch: hasTorch() };
   }
@@ -123,11 +124,14 @@
         const cv = drawScaled(im, m, c);
         const data = cv.getContext("2d").getImageData(0, 0, cv.width, cv.height).data;
         const r = await decodeImageData("p" + (++reqId), data.buffer, cv.width, cv.height);
-        if (r && r.text) return r;
+        if (r && r.hits && r.hits.length) return r.hits;
       }
-      return null;
+      return [];
     } finally { URL.revokeObjectURL(url); }
   }
 
-  window.Scanner = { start, stop, toggleTorch, decodeFile, loadImage, drawScaled };
+  function pause() { paused = true; }
+  function resume() { paused = false; inFlight = false; }
+
+  window.Scanner = { start, stop, pause, resume, toggleTorch, decodeFile, loadImage, drawScaled };
 })();

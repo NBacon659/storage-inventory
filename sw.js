@@ -1,5 +1,5 @@
 /* Offline shell: the app opens with no signal (storage units often have none). Lookups still need a connection. */
-const CACHE = "storage-inventory-1.0.0";
+const CACHE = "storage-inventory-1.1.0";
 const SHELL = [
   "./", "index.html", "styles.css", "manifest.webmanifest",
   "js/store.js", "js/lookup.js", "js/scanner.js", "js/app.js", "js/decode-worker.js",

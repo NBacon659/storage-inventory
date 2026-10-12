@@ -42,6 +42,7 @@
     }
     return t;
   }
+  function isIsbn(code) { return /^97[89]\d{10}$/.test(code); }
   function isGtin(code) { return /^\d{8}$|^\d{12,14}$/.test(code); }
   function ean13(code) { return code.length === 12 ? "0" + code : code; }
 
@@ -132,6 +133,36 @@
     return hit ? Object.assign(hit, { source: "EAN-Search" }) : null;
   }
 
+  /* ---- books (ISBN barcodes: TTRPG books, novels, comics with ISBNs) ---- */
+  function bookName(title, subtitle, publisher) {
+    let n = (title || "").trim();
+    if (subtitle && !n.toLowerCase().includes(String(subtitle).toLowerCase())) n += ": " + String(subtitle).trim();
+    if (publisher && !n.toLowerCase().includes(String(publisher).toLowerCase())) n += " (" + String(publisher).trim() + ")";
+    return n.replace(/\s+/g, " ").trim();
+  }
+  function parseOpenLibrary(body, isbn) {
+    const b = body && body["ISBN:" + isbn];
+    if (!b || !b.title) return null;
+    const pub = Array.isArray(b.publishers) && b.publishers[0] ? b.publishers[0].name : "";
+    return { name: bookName(b.title, b.subtitle, pub), brand: pub };
+  }
+  async function openLibrary(isbn) {
+    const r = await getJson(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`);
+    const hit = parseOpenLibrary(r.body, isbn);
+    return hit ? Object.assign(hit, { source: "Open Library" }) : null;
+  }
+  function parseGoogleBooks(body) {
+    const v = body && Array.isArray(body.items) && body.items[0] && body.items[0].volumeInfo;
+    if (!v || !v.title) return null;
+    return { name: bookName(v.title, v.subtitle, v.publisher), brand: v.publisher || "" };
+  }
+  async function googleBooks(isbn) {
+    const r = await getJson(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&maxResults=1`);
+    if (r.status === 429) throw new Error("limit:Google Books is busy, try again later");
+    const hit = parseGoogleBooks(r.body);
+    return hit ? Object.assign(hit, { source: "Google Books" }) : null;
+  }
+
   /**
    * Look up a product name. Resolves {status:"found", name, brand, source}
    * or {status:"notfound"} or {status:"error", message}.
@@ -148,7 +179,9 @@
     }
     if (navigator.onLine === false) return { status: "error", message: "offline" };
     const s = getSettings();
-    const chain = [() => openFacts(code)];
+    const chain = [];
+    if (isIsbn(code)) chain.push(() => openLibrary(code), () => googleBooks(code));
+    chain.push(() => openFacts(code));
     if (s.proxy) chain.push(() => upcItemDbProxy(code, s.proxy));
     if (s.goUpc) chain.push(() => goUpc(code, s.goUpc));
     if (s.ean) chain.push(() => eanSearch(code, s.ean));
@@ -170,6 +203,8 @@
     return rec;
   }
 
-  window.Lookup = { lookup, canonical, checkDigitOk, isGtin, getSettings, setSettings, upcEtoA,
-    _parse: { parseOpenFacts, parseUpcItemDb, parseGoUpc, parseEanSearch, compose } };
+  function hasExtraSources() { const s = getSettings(); return !!(s.proxy || s.goUpc || s.ean); }
+
+  window.Lookup = { lookup, canonical, checkDigitOk, isGtin, isIsbn, getSettings, setSettings, upcEtoA, hasExtraSources,
+    _parse: { parseOpenFacts, parseUpcItemDb, parseGoUpc, parseEanSearch, parseOpenLibrary, parseGoogleBooks, compose } };
 })();

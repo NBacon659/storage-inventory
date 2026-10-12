@@ -1,6 +1,6 @@
 /* Storage Inventory: UI, scanning flow, editing, export/backup. */
 (function () {
-  const APP_VERSION = "1.0.0";
+  const APP_VERSION = "1.1.0";
   const $ = id => document.getElementById(id);
   const LS_BACKUP = "si-backup-state";
   const LS_BANNER = "si-banner-dismissed";
@@ -64,7 +64,8 @@
     const unnamed = all.filter(i => !i.name && i.upc && i.lookup !== "found");
     const retryable = unnamed.filter(i => i.lookup === "error" || i.lookup === "pending" || i.lookup === "notfound");
     $("pendingBar").hidden = !retryable.length;
-    $("pendingMsg").textContent = retryable.length + (retryable.length === 1 ? " item has" : " items have") + " no name yet";
+    $("pendingMsg").textContent = retryable.length + (retryable.length === 1 ? " item has" : " items have") + " no name yet" +
+      (Lookup.hasExtraSources() ? "" : ". More sources in Settings");
 
     const q = $("q").value.trim().toLowerCase();
     const shown = all.filter(i => !q || [i.name, i.upc, i.notes, i.condition].join(" ").toLowerCase().includes(q))
@@ -129,58 +130,15 @@
   let actx = null;
   function primeAudio() { try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === "suspended") actx.resume(); } catch (e) {} }
   function beep(kind) {
-    if (navigator.vibrate) navigator.vibrate(kind === "new" ? [40, 60, 40] : 40);
+    if (navigator.vibrate) navigator.vibrate(kind === "new" ? [40, 60, 40] : kind === "ask" ? [80] : 40);
     if (!actx) return;
-    const tones = kind === "new" ? [1320, 1760] : [1760];
+    const tones = kind === "new" ? [1320, 1760] : kind === "ask" ? [880, 660] : [1760];
     tones.forEach((f, ix) => {
       const o = actx.createOscillator(), g = actx.createGain();
       o.frequency.value = f; o.type = "square";
       const t = actx.currentTime + ix * 0.09;
       g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.08, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
       o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.08);
-    });
-  }
-
-  /* ---------- code handling ---------- */
-  let lastCode = null, lastSeen = 0;
-  function feed(text, strong) {
-    const box = $("scanFeed");
-    const d = document.createElement("div");
-    const s = document.createElement("span"); s.textContent = text;
-    const b = document.createElement("b"); b.textContent = strong;
-    d.append(s, b); box.prepend(d);
-    while (box.children.length > 3) box.lastChild.remove();
-  }
-  async function handleCode(raw, format, via) {
-    const code = Lookup.canonical(raw, format);
-    if (!code) return;
-    const t = now();
-    if (via === "live") {
-      // the same barcode held in view is one scan; it counts again only after leaving the frame
-      if (code === lastCode && t - lastSeen < 1500) { lastSeen = t; return; }
-      lastCode = code; lastSeen = t;
-      const ret = $("reticle"); ret.classList.add("hit"); setTimeout(() => ret.classList.remove("hit"), 250);
-    }
-    const id = idFor(code);
-    const ex = items.get(id);
-    if (ex) {
-      const before = +ex.qty || 0;
-      await save({ ...ex, qty: before + 1, updatedAt: t });
-      lastFlash = id; render();
-      beep("count");
-      const label = ex.name || code;
-      if (via === "live") feed(label, "×" + (before + 1));
-      else toast(label + " → " + (before + 1), "Undo", () => { const c = items.get(id); if (c) save({ ...c, qty: before }); });
-      return;
-    }
-    const item = { id, upc: code, name: "", brand: "", source: "", qty: 1, condition: "", price: "", notes: "", photoIds: [], lookup: "pending", createdAt: t, updatedAt: t };
-    await save(item);
-    lastFlash = id; render();
-    beep("new");
-    if (via === "live") feed("New: " + code, "×1"); else toast("Added " + code);
-    if (items.size === 1) Store.requestPersist();
-    runLookup(id).then(r => {
-      if (via === "live" && !$("scanner").hidden && r && r.status === "found") feed(r.name, "×" + ((items.get(id) || {}).qty || 1));
     });
   }
 
@@ -220,37 +178,195 @@
     if (n) retryAll();
   });
 
-  /* ---------- live scanner ---------- */
+  /* ---------- adding one scanned code ---------- */
+  const FORMAT_LABEL = { UPCA: "UPC-A", UPCE: "UPC-E", EAN13: "EAN-13", EAN8: "EAN-8", Code128: "Code 128", Code39: "Code 39", ITF: "ITF" };
+  function formatLabel(code, format) {
+    if (Lookup.isIsbn(code)) return "ISBN (book)";
+    if (/^\d{12}$/.test(code)) return "UPC";
+    return FORMAT_LABEL[format] || format || "Barcode";
+  }
+  const isRetail = code => /^\d{8}$|^\d{12,14}$/.test(code);
+
+  /** Adds exactly one unit of a code. Returns {id, before, isNew}. */
+  async function addOne(code) {
+    const t = now(), id = idFor(code), ex = items.get(id);
+    if (ex) {
+      const before = +ex.qty || 0;
+      await save({ ...ex, qty: before + 1, updatedAt: t });
+      lastFlash = id; render();
+      return { id, before, isNew: false };
+    }
+    const item = { id, upc: code, name: "", brand: "", source: "", qty: 1, condition: "", price: "", notes: "", photoIds: [], lookup: "pending", createdAt: t, updatedAt: t };
+    await save(item);
+    lastFlash = id; render();
+    if (items.size === 1) Store.requestPersist();
+    runLookup(id).then(() => refreshResult(id));
+    return { id, before: 0, isNew: true };
+  }
+  async function undoAdd(r) {
+    if (r.isNew) { await remove(r.id); return; }
+    const c = items.get(r.id); if (c) await save({ ...c, qty: r.before });
+  }
+  /** Used by Type UPC and Snapshot: add one and offer Undo in a toast. */
+  async function addWithToast(code) {
+    const r = await addOne(code);
+    beep(r.isNew ? "new" : "count");
+    const it = items.get(r.id);
+    toast((r.isNew ? "Added " : "") + ((it && it.name) || code) + (r.isNew ? "" : " → " + (r.before + 1)), "Undo", () => undoAdd(r));
+    return r;
+  }
+
+  /* ---------- barcode picker (several codes read at once) ---------- */
+  let pickResolve = null;
+  async function pickCode(cands) {
+    const list = $("pickList"); list.textContent = "";
+    for (const c of cands) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "pick";
+      const top = document.createElement("span"); top.className = "pick-top";
+      const code = document.createElement("span"); code.className = "code"; code.textContent = c.code;
+      const tag = document.createElement("span"); tag.className = "chip"; tag.textContent = formatLabel(c.code, c.format);
+      top.append(code, tag);
+      const sub = document.createElement("span"); sub.className = "pick-sub";
+      const ex = items.get(idFor(c.code));
+      sub.textContent = ex ? (ex.name || "Already in your list") + " · have " + (ex.qty || 0) : (c.hits ? "Read " + c.hits + (c.hits === 1 ? " time" : " times") : "");
+      if (!ex && isRetail(c.code)) {
+        sub.textContent = "Looking up…";
+        Lookup.lookup(c.code).then(l => {
+          sub.textContent = l && l.status === "found" ? l.name : "No name found" + (c.hits ? " · read " + c.hits + "×" : "");
+        }).catch(() => { sub.textContent = ""; });
+      }
+      b.append(top, sub);
+      b.onclick = () => closePick(c);
+      list.append(b);
+    }
+    $("pickBg").hidden = false;
+    return new Promise(res => { pickResolve = res; });
+  }
+  function closePick(choice) { $("pickBg").hidden = true; const r = pickResolve; pickResolve = null; if (r) r(choice || null); }
+  $("pickNone").onclick = () => closePick(null);
+
+  /* ---------- live scan session ---------- */
+  // seeking -> collecting (reads for CAPTURE_MS) -> paused on a result or the picker -> "Scan next" -> seeking
+  const CAPTURE_MS = 700, GONE_MS = 1200;
+  const scan = { state: "off", t0: 0, counts: new Map(), guard: null, last: null };
+
+  function onFrame(hits) {
+    if (scan.state !== "seeking" && scan.state !== "collecting") return;
+    const t = now();
+    const seen = new Map();
+    for (const h of hits) { const code = Lookup.canonical(h.text, h.format); if (code && !seen.has(code)) seen.set(code, h.format); }
+    // every code from the last capture is ignored until all of them have left the view,
+    // so holding still never double-counts and a box's second barcode never sneaks in
+    if (scan.guard) {
+      let present = false;
+      for (const code of scan.guard.codes) if (seen.delete(code)) present = true;
+      if (present) scan.guard.lastSeen = t;
+      else if (t - scan.guard.lastSeen > GONE_MS) { scan.guard = null; if (scan.state === "seeking") setStatus("Hold a barcode inside the box"); }
+    }
+    if (scan.state === "seeking") {
+      if (!seen.size) return;
+      scan.state = "collecting"; scan.t0 = t; scan.counts = new Map();
+      setStatus("Reading…");
+    }
+    for (const [code, format] of seen) {
+      const c = scan.counts.get(code) || { code, format, hits: 0 };
+      c.hits++; scan.counts.set(code, c);
+    }
+    if (t - scan.t0 >= CAPTURE_MS) finishCapture();
+  }
+  async function finishCapture() {
+    Scanner.pause();
+    scan.state = "deciding";
+    const cands = [...scan.counts.values()].sort((a, b) => (isRetail(b.code) - isRetail(a.code)) || (b.hits - a.hits));
+    let choice = cands[0];
+    if (cands.length > 1) {
+      beep("ask");
+      setStatus("Pick the barcode for this item");
+      choice = await pickCode(cands);
+      if (!choice) { scan.guard = null; resumeScan(); return; }
+    }
+    const r = await addOne(choice.code);
+    beep(r.isNew ? "new" : "count");
+    scan.last = { ...r, code: choice.code, format: choice.format };
+    scan.guard = { codes: new Set(cands.map(c => c.code)), lastSeen: now() };
+    scan.state = "result";
+    showResult();
+  }
+  function setStatus(t) { $("scanStatus").textContent = t; }
+  function showResult() {
+    const r = scan.last; if (!r) return;
+    const it = items.get(r.id);
+    $("resultCard").hidden = false;
+    $("reticle").classList.add("hit");
+    $("resName").textContent = it ? (it.name || (it.lookup === "pending" ? "Looking up name…" : "No name found yet")) : "Removed";
+    $("resName").classList.toggle("pend", !(it && it.name));
+    $("resCode").textContent = r.code;
+    $("resTag").textContent = r.isNew ? "New item" : "Added 1 more";
+    $("resQty").textContent = it ? (it.qty || 0) : 0;
+    setStatus(r.isNew ? "Added to your list" : "Count updated");
+  }
+  function refreshResult(id) { if (scan.state === "result" && scan.last && scan.last.id === id) showResult(); }
+  function resumeScan() {
+    $("resultCard").hidden = true; $("reticle").classList.remove("hit");
+    scan.state = "seeking"; scan.counts = new Map();
+    setStatus(scan.guard ? "Move to the next barcode" : "Hold a barcode inside the box");
+    Scanner.resume();
+  }
+  $("scanNext").onclick = resumeScan;
+  $("resPlus").onclick = () => { const c = items.get(scan.last.id); if (c) save({ ...c, qty: (+c.qty || 0) + 1 }).then(showResult); };
+  $("resMinus").onclick = () => { const c = items.get(scan.last.id); if (c && (+c.qty || 0) > 0) save({ ...c, qty: (+c.qty || 0) - 1 }).then(showResult); };
+  $("resUndo").onclick = async () => {
+    await undoAdd(scan.last);
+    scan.guard = null; scan.last = null;
+    resumeScan(); setStatus("Undone. Scan again");
+  };
+  $("resEdit").onclick = () => {
+    const id = scan.last && scan.last.id;
+    closeScanner();
+    if (id && items.get(id)) openSheet(items.get(id), false);
+  };
+
+  /* ---------- live scanner open/close ---------- */
   $("scanBtn").onclick = async () => {
     primeAudio();
-    $("scanner").hidden = false; $("scanFeed").textContent = ""; $("scanStatus").textContent = "Starting camera…";
-    lastCode = null;
+    $("scanner").hidden = false; $("resultCard").hidden = true; setStatus("Starting camera…");
+    scan.state = "seeking"; scan.guard = null; scan.last = null; scan.counts = new Map();
     try {
-      const caps = await Scanner.start($("video"), $("reticle"), (t, f) => handleCode(t, f, "live"));
+      const caps = await Scanner.start($("video"), $("reticle"), onFrame);
       $("torchBtn").hidden = !caps.torch;
-      $("scanStatus").textContent = "Hold a barcode inside the box";
+      setStatus("Hold a barcode inside the box");
     } catch (e) {
-      $("scanner").hidden = true; Scanner.stop();
+      closeScanner();
       const denied = e && (e.name === "NotAllowedError" || e.name === "SecurityError");
       toast(denied ? "Camera access is off. In iPhone Settings › Safari › Camera, allow it, then try again. Or use Snapshot."
                    : (e.message || "Couldn't start the camera."), "Snapshot", () => $("snapCam").click(), 9000);
     }
   };
-  $("closeScan").onclick = () => { Scanner.stop(); $("scanner").hidden = true; render(); };
+  function closeScanner() {
+    Scanner.stop(); scan.state = "off";
+    if (pickResolve) closePick(null);
+    $("scanner").hidden = true; $("resultCard").hidden = true; render();
+  }
+  $("closeScan").onclick = closeScanner;
   $("torchBtn").onclick = async () => { const on = await Scanner.toggleTorch(); $("torchBtn").textContent = on ? "Light off" : "Light"; };
-  $("snapBtn").onclick = () => { Scanner.stop(); $("scanner").hidden = true; $("snapCam").click(); };
-  document.addEventListener("visibilitychange", () => { if (document.hidden && !$("scanner").hidden) { Scanner.stop(); $("scanner").hidden = true; render(); } });
+  $("snapBtn").onclick = () => { closeScanner(); $("snapCam").click(); };
+  document.addEventListener("visibilitychange", () => { if (document.hidden && !$("scanner").hidden) closeScanner(); });
 
   $("snapCam").onchange = async e => {
     const f = e.target.files && e.target.files[0]; e.target.value = ""; if (!f) return;
     toast("Reading barcode…");
     try {
-      const r = await Scanner.decodeFile(f);
-      if (!r) { toast("No barcode found. Fill the frame with it, hold steady, good light.", "Add by hand", () => newManual()); return; }
-      await handleCode(r.text, r.format, "snap");
-      const id = idFor(Lookup.canonical(r.text, r.format));
-      const it = items.get(id);
-      if (it && !(it.photoIds || []).length) { const pid = await storePhoto(f, id); await save({ ...items.get(id), photoIds: [pid] }); }
+      const hits = await Scanner.decodeFile(f);
+      const seen = new Map();
+      for (const h of hits) { const code = Lookup.canonical(h.text, h.format); if (code && !seen.has(code)) seen.set(code, { code, format: h.format, hits: 0 }); }
+      const cands = [...seen.values()].sort((a, b) => isRetail(b.code) - isRetail(a.code));
+      if (!cands.length) { toast("No barcode found. Fill the frame with it, hold steady, good light.", "Add by hand", () => newManual()); return; }
+      $("toast").hidden = true;
+      const choice = cands.length > 1 ? await pickCode(cands) : cands[0];
+      if (!choice) return;
+      const r = await addWithToast(choice.code);
+      const it = items.get(r.id);
+      if (it && !(it.photoIds || []).length) { const pid = await storePhoto(f, r.id); await save({ ...items.get(r.id), photoIds: [pid] }); }
     } catch (err) { toast(err.message || "Couldn't read that photo."); }
   };
 
@@ -265,7 +381,7 @@
       toast("That number fails the barcode check digit. Double-check the digits."); return;
     }
     $("typeBg").hidden = true;
-    handleCode(v, v.length === 8 && /^[01]/.test(v) ? "UPCE" : "", "typed");
+    addWithToast(Lookup.canonical(v, v.length === 8 && /^[01]/.test(v) ? "UPCE" : ""));
   };
 
   /* ---------- editor ---------- */
@@ -332,7 +448,8 @@
     b.disabled = false; b.textContent = "Look up";
     $("lookupHint").hidden = false;
     if (r.status === "found") { $("fName").value = r.name; editing.source = r.source; editing.lookup = "found"; $("lookupHint").textContent = "Found in " + r.source + ". Edit if needed."; updateLinks(); }
-    else if (r.status === "notfound") $("lookupHint").textContent = (r.warn && /^(key|limit):/.test(r.warn) ? r.warn.split(":").slice(1).join(":") + ". " : "") + "No database match. Try Search UPC on Google, or type the name.";
+    else if (r.status === "notfound") $("lookupHint").textContent = (r.warn && /^(key|limit):/.test(r.warn) ? r.warn.split(":").slice(1).join(":") + ". " : "") + "No database match. Try Search UPC on Google, or type the name." +
+      (Lookup.hasExtraSources() ? "" : " Adding UPCitemdb in Settings finds more games, dice and accessories.");
     else $("lookupHint").textContent = r.message === "offline" ? "No signal. It will retry later." : "Lookup failed. Try again.";
   };
   function closeSheet() { $("sheetBg").hidden = true; editing = null; }
@@ -487,7 +604,9 @@
     const proxy = $("sProxy").value.trim();
     if (proxy && !/^https:\/\//i.test(proxy)) { toast("The proxy URL must start with https://"); return; }
     Lookup.setSettings({ proxy, goUpc: $("sGoUpc").value.trim(), ean: $("sEan").value.trim() });
-    toast("Lookup settings saved");
+    Store.clearLookups().catch(() => {}); // re-check earlier misses against the new sources
+    toast("Lookup settings saved. Tap Retry lookups to re-check unnamed items.");
+    render();
   };
   $("wipeBtn").onclick = async () => {
     if ($("wipeConfirm").value.trim() !== "DELETE") { toast("Type DELETE to confirm."); return; }
@@ -528,5 +647,5 @@
   }
   boot();
 
-  window.__app = { handleCode, items: () => items, csvText }; // for debugging from the console
+  window.__app = { addOne, items: () => items, csvText, scan }; // for debugging from the console
 })();

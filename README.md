@@ -6,9 +6,11 @@ Hosted as a static site on GitHub Pages: no build step, no server.
 
 ## Features
 
-- Live viewfinder scanning (UPC-A, UPC-E, EAN-13, EAN-8, Code 128, Code 39, ITF), with a snapshot fallback
+- Live viewfinder scanning (UPC-A, UPC-E, EAN-13/ISBN, EAN-8, Code 128, Code 39, ITF), with a snapshot fallback
+- One scan = one entry: the camera pauses after each capture and shows the result; tap **Scan next** to continue
+- When more than one barcode is read (e.g. a book's ISBN plus a store UPC), a picker shows each with its looked-up name; only the chosen one is added
 - Same barcode again = +1 to that item's count (it must leave the frame between scans)
-- Name lookup: Open Food / Beauty / Products / Pet Food Facts (free, no key), plus optional UPCitemdb (via your own Cloudflare Worker), Go-UPC, or EAN-Search
+- Name lookup: Open Library and Google Books for ISBNs (TTRPG books), Open Food / Beauty / Products / Pet Food Facts (free, no key), plus optional UPCitemdb (via your own Cloudflare Worker), Go-UPC, or EAN-Search
 - Per-item condition, estimated price, notes, photos (camera or library)
 - Search UPC on Google and eBay sold-price links per item
 - CSV export (Excel-safe UPCs) and full ZIP backup/restore including photos
@@ -37,5 +39,5 @@ Data lives only on the phone that scanned it. On iOS, add the app to the Home Sc
 UPCitemdb's free trial API (about 100 lookups a day) has the broadest free coverage of general merchandise, but it rejects direct browser requests. `worker/upc-proxy.js` is a tiny Cloudflare Worker that relays them:
 
 1. Cloudflare dashboard › Workers & Pages › Create › Worker, name it `upc-proxy`, Deploy.
-2. Edit code, paste in `worker/upc-proxy.js`, set `ALLOWED_ORIGIN` to `https://<your-username>.github.io`, Deploy.
+2. Edit code, paste in `worker/upc-proxy.js`, set `ALLOWED_ORIGIN` to `https://nbacon659.github.io` (already set), Deploy.
 3. In the app: Settings › UPCitemdb proxy URL › paste the worker URL › Save.

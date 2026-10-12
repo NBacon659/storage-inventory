@@ -65,11 +65,40 @@
   <div class="scan-top">
     <span id="scanStatus">Point at a barcode</span>
   </div>
-  <div class="scan-feed" id="scanFeed" aria-live="polite"></div>
+  <div class="result-card" id="resultCard" hidden aria-live="polite">
+    <div class="res-head">
+      <span class="chip" id="resTag">New item</span>
+      <span class="code" id="resCode"></span>
+    </div>
+    <div class="res-name" id="resName"></div>
+    <div class="res-row">
+      <span class="res-label">In your list</span>
+      <div class="qty">
+        <button id="resMinus" type="button" aria-label="Decrease count">−</button>
+        <b id="resQty">1</b>
+        <button id="resPlus" type="button" aria-label="Increase count">+</button>
+      </div>
+    </div>
+    <div class="res-actions">
+      <button id="resUndo" type="button">Undo</button>
+      <button id="resEdit" type="button">Edit</button>
+      <button id="scanNext" class="primary" type="button">Scan next</button>
+    </div>
+  </div>
   <div class="scan-bottom">
     <button id="torchBtn" type="button" hidden>Light</button>
     <button id="snapBtn" type="button">Snapshot</button>
-    <button id="closeScan" class="primary" type="button">Done</button>
+    <button id="closeScan" type="button">Done</button>
+  </div>
+</div>
+
+<!-- several barcodes read at once -->
+<div id="pickBg" class="sheet-bg pick-bg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pickTitle">
+    <h2 id="pickTitle">Which barcode?</h2>
+    <p class="hint">The camera read more than one barcode. Tap the one for this item; only that one is added.</p>
+    <div id="pickList" class="pick-list"></div>
+    <button id="pickNone" type="button">None of these, scan again</button>
   </div>
 </div>
 

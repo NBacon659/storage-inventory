@@ -12,7 +12,7 @@ const OPTIONS = {
   tryRotate: true,
   tryInvert: false,
   formats: ["UPCA", "UPCE", "EAN13", "EAN8", "Code128", "Code39", "ITF"],
-  maxNumberOfSymbols: 1
+  maxNumberOfSymbols: 4
 };
 
 self.onmessage = async e => {
@@ -20,9 +20,10 @@ self.onmessage = async e => {
   try {
     const img = new ImageData(new Uint8ClampedArray(buf), w, h);
     const res = await self.ZXingWASM.readBarcodes(img, OPTIONS);
-    const hit = res.find(r => r.isValid && r.text);
-    self.postMessage(hit ? { id, text: hit.text, format: hit.format } : { id, text: null });
+    // every valid barcode in view (a box can carry a UPC, an ISBN and a store label at once)
+    const hits = res.filter(r => r.isValid && r.text).map(r => ({ text: r.text, format: r.format }));
+    self.postMessage({ id, hits });
   } catch (err) {
-    self.postMessage({ id, text: null, error: String(err && err.message || err) });
+    self.postMessage({ id, hits: [], error: String(err && err.message || err) });
   }
 };
