@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Storage Inventory</title>
+<meta name="description" content="Scan barcodes to inventory a storage unit: UPC, item name, running count, photos, CSV export.">
+<meta name="theme-color" content="#e8711c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Inventory">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><small>Unit contents</small>Storage Inventory</h1>
+    <button id="openSettings" class="ghost small" type="button" aria-label="Settings">Settings</button>
+  </header>
+
+  <div class="totals" aria-live="polite">
+    <div><b id="tUnique">0</b><span>Items</span></div>
+    <div><b id="tUnits">0</b><span>Total units</span></div>
+    <div><b id="tValue">$0</b><span>Est. value</span></div>
+  </div>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <div class="tools">
+    <label for="q" class="sr">Search items</label>
+    <input id="q" class="search" type="search" placeholder="Search name, UPC, notes" autocomplete="off">
+    <button id="addManual" type="button">+ Add</button>
+  </div>
+
+  <div id="pendingBar" class="pending" hidden>
+    <span id="pendingMsg"></span>
+    <button id="retryLookups" type="button" class="small">Retry lookups</button>
+  </div>
+
+  <div class="list" id="list"><div class="empty"><span class="spin"></span>Loading</div></div>
+
+  <div class="foot">
+    <button id="exportCsv" type="button">Export CSV</button>
+    <button id="exportZip" type="button">Backup (ZIP + photos)</button>
+  </div>
+  <p class="hint">Tap a row to edit. Scanning a barcode you already have adds 1 to its count; take each item out of view before scanning the next one.</p>
+</div>
+
+<div class="bar"><div class="in">
+  <button class="primary scan" id="scanBtn" type="button">Scan</button>
+  <button id="typeUpc" type="button">Type UPC</button>
+</div></div>
+
+<!-- live scanner -->
+<div id="scanner" class="scanner" hidden>
+  <video id="video" playsinline muted autoplay></video>
+  <div class="reticle" id="reticle"><span></span></div>
+  <div class="scan-top">
+    <span id="scanStatus">Point at a barcode</span>
+  </div>
+  <div class="scan-feed" id="scanFeed" aria-live="polite"></div>
+  <div class="scan-bottom">
+    <button id="torchBtn" type="button" hidden>Light</button>
+    <button id="snapBtn" type="button">Snapshot</button>
+    <button id="closeScan" class="primary" type="button">Done</button>
+  </div>
+</div>
+
+<input id="snapCam" type="file" accept="image/*" capture="environment" hidden>
+<input id="phCam" type="file" accept="image/*" capture="environment" hidden>
+<input id="phFile" type="file" accept="image/*" multiple hidden>
+<input id="importFile" type="file" accept=".zip,application/zip" hidden>
+
+<div id="toast" class="toast" hidden role="status"><span id="toastMsg"></span><button id="toastAct" type="button" hidden>Undo</button></div>
+
+<!-- item editor -->
+<div id="sheetBg" class="sheet-bg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <h2 id="sheetTitle">Edit item</h2>
+    <div class="field">
+      <label for="fName">Item name</label>
+      <div class="inline">
+        <input id="fName" type="text" placeholder="e.g. Old Spice Timber deodorant 3 oz" autocomplete="off">
+        <button id="lookupBtn" type="button">Look up</button>
+      </div>
+      <span class="hint" id="lookupHint" hidden></span>
+    </div>
+    <div class="grid2">
+      <div class="field"><label for="fUpc">UPC / barcode</label><input id="fUpc" type="text" inputmode="numeric" class="code" autocomplete="off"></div>
+      <div class="field"><label for="fQty">Quantity</label><input id="fQty" type="number" min="0" inputmode="numeric"></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label for="fCond">Condition</label>
+        <select id="fCond"><option value="">—</option><option>New / sealed</option><option>Like new</option><option>Good</option><option>Fair</option><option>For parts</option></select></div>
+      <div class="field"><label for="fPrice">Est. price each ($)</label><input id="fPrice" type="number" min="0" step="0.01" inputmode="decimal"></div>
+    </div>
+    <div class="field"><label for="fNotes">Notes</label><textarea id="fNotes" placeholder="Box #, where it is in the unit, missing parts"></textarea></div>
+    <div class="field">
+      <label>Photos</label>
+      <div class="photos" id="fPhotos"></div>
+      <div class="inline"><button id="addCam" type="button">Take photo</button><button id="addLib" type="button">Choose from library</button></div>
+    </div>
+    <div class="links">
+      <a id="googleLink" class="btn ghost small" href="#" target="_blank" rel="noopener">Search UPC on Google</a>
+      <a id="compsLink" class="btn ghost small" href="#" target="_blank" rel="noopener">eBay sold prices</a>
+    </div>
+    <div class="inline">
+      <button id="saveItem" class="primary grow" type="button">Save</button>
+      <button id="cancelItem" type="button">Cancel</button>
+    </div>
+    <button id="delItem" class="danger ghost" type="button">Delete item</button>
+    <div id="delConfirm" class="confirm" hidden><span>Delete this item and its photos?</span><button id="delYes" class="primary" type="button">Delete</button><button id="delNo" type="button">Keep</button></div>
+  </div>
+</div>
+
+<!-- type a UPC -->
+<div id="typeBg" class="sheet-bg" hidden>
+  <form class="sheet" id="typeForm" role="dialog" aria-modal="true" aria-labelledby="typeTitle">
+    <h2 id="typeTitle">Type a barcode</h2>
+    <div class="field"><label for="typeInput">UPC / EAN digits</label><input id="typeInput" type="text" inputmode="numeric" class="code" autocomplete="off" required></div>
+    <div class="inline"><button class="primary grow" type="submit">Add</button><button id="typeCancel" type="button">Cancel</button></div>
+  </form>
+</div>
+
+<!-- settings -->
+<div id="setBg" class="sheet-bg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="setTitle">
+    <h2 id="setTitle">Settings</h2>
+    <section class="group">
+      <h3>Name lookup sources</h3>
+      <p class="hint">Open Food, Beauty and Products Facts are always checked (free, no key). Broader databases need one of these. Keys are stored only on this phone.</p>
+      <div class="field"><label for="sProxy">UPCitemdb proxy URL</label><input id="sProxy" type="url" placeholder="https://upc-proxy.yourname.workers.dev" autocomplete="off"><span class="hint">Your Cloudflare Worker from the repo's worker folder. Free, about 100 lookups a day.</span></div>
+      <div class="field"><label for="sGoUpc">Go-UPC API key</label><input id="sGoUpc" type="password" autocomplete="off"></div>
+      <div class="field"><label for="sEan">EAN-Search token</label><input id="sEan" type="password" autocomplete="off"></div>
+      <button id="saveSettings" class="primary" type="button">Save lookup settings</button>
+    </section>
+    <section class="group">
+      <h3>Storage</h3>
+      <p class="hint" id="storageInfo">Checking…</p>
+      <div class="inline wrapline">
+        <button id="importBtn" type="button">Restore from backup ZIP</button>
+      </div>
+    </section>
+    <section class="group">
+      <h3>Start over</h3>
+      <p class="hint">Deletes every item and photo on this phone. Export a backup first.</p>
+      <div class="inline"><input id="wipeConfirm" type="text" placeholder="Type DELETE" autocomplete="off" aria-label="Type DELETE to confirm"><button id="wipeBtn" class="danger" type="button">Delete all</button></div>
+    </section>
+    <button id="closeSettings" type="button">Close</button>
+    <p class="hint ver">Version <span id="ver"></span></p>
+  </div>
+</div>
+
+<script src="vendor/jszip-3.10.1.min.js"></script>
+<script src="js/store.js"></script>
+<script src="js/lookup.js"></script>
+<script src="js/scanner.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
