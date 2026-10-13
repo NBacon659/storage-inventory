@@ -47,9 +47,15 @@
     <button id="retryLookups" type="button" class="small">Retry lookups</button>
   </div>
 
+  <div id="cropBar" class="pending" hidden>
+    <span id="cropMsg"></span>
+    <button id="cropAll" type="button" class="small">Crop now</button>
+  </div>
+
   <div class="list" id="list"><div class="empty"><span class="spin"></span>Loading</div></div>
 
   <div class="foot">
+    <button id="exportPdf" type="button" class="wide">Export PDF catalog</button>
     <button id="exportCsv" type="button">Export CSV</button>
     <button id="exportZip" type="button">Backup (ZIP + photos)</button>
   </div>
@@ -152,6 +158,44 @@
   </div>
 </div>
 
+<!-- 1:1 cropper -->
+<div id="cropBg" class="crop-bg" hidden>
+  <div class="crop" role="dialog" aria-modal="true" aria-labelledby="cropTitle">
+    <div class="crop-head">
+      <h2 id="cropTitle">Crop photo</h2>
+      <span id="cropProgress" class="crop-progress" hidden></span>
+    </div>
+    <div class="crop-stage">
+      <canvas id="cropCanvas" aria-label="Drag to position, pinch to zoom"></canvas>
+      <div class="crop-grid" aria-hidden="true"></div>
+    </div>
+    <p class="crop-hint">Drag to position. Pinch or use the slider to zoom.</p>
+    <div class="crop-zoom">
+      <label for="cropZoom">Zoom</label>
+      <input id="cropZoom" type="range" min="1" max="6" step="0.01" value="1">
+    </div>
+    <div class="crop-tools">
+      <button id="cropRotate" type="button">Rotate 90°</button>
+      <button id="cropReset" type="button">Reset</button>
+    </div>
+    <div class="crop-actions">
+      <button id="cropCancel" type="button">Stop</button>
+      <button id="cropSkip" type="button" hidden>Skip</button>
+      <button id="cropSave" class="primary" type="button">Save crop</button>
+    </div>
+  </div>
+</div>
+
+<!-- PDF needs every photo cropped -->
+<div id="pdfGateBg" class="sheet-bg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pdfGateTitle">
+    <h2 id="pdfGateTitle">Crop photos first</h2>
+    <p id="pdfGateMsg"></p>
+    <p class="hint">Each item's first photo goes in the catalog, 10 items per page. You'll go through the uncropped photos one at a time; tap Stop to finish later.</p>
+    <div class="inline"><button id="pdfGateCrop" class="primary grow" type="button">Crop now</button><button id="pdfGateCancel" type="button">Not now</button></div>
+  </div>
+</div>
+
 <!-- type a UPC -->
 <div id="typeBg" class="sheet-bg" hidden>
   <form class="sheet" id="typeForm" role="dialog" aria-modal="true" aria-labelledby="typeTitle">
@@ -194,6 +238,8 @@
 <script src="js/store.js"></script>
 <script src="js/lookup.js"></script>
 <script src="js/scanner.js"></script>
+<script src="js/cropper.js"></script>
+<script src="js/catalog.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

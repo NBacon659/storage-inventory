@@ -1,12 +1,13 @@
 /* Storage Inventory: UI, scanning flow, editing, export/backup. */
 (function () {
-  const APP_VERSION = "1.1.1";
+  const APP_VERSION = "1.2.0";
   const $ = id => document.getElementById(id);
   const LS_BACKUP = "si-backup-state";
   const LS_BANNER = "si-banner-dismissed";
 
   let items = new Map();          // id -> item
   const thumbs = new Map();       // photoId -> objectURL
+  let cropped = new Map();        // photoId -> has been cropped to 1:1
   let editing = null, editingIsNew = false, lastFlash = null;
 
   /* ---------- helpers ---------- */
@@ -49,9 +50,46 @@
       const cv = Scanner.drawScaled(im, 1600);
       const blob = await new Promise(r => cv.toBlob(r, "image/jpeg", 0.85));
       const id = newId("p-");
-      await Store.putPhoto({ id, itemId, blob, at: now() });
+      await Store.putPhoto({ id, itemId, blob, at: now(), cropped: false });
+      cropped.set(id, false);
       return id;
     } finally { URL.revokeObjectURL(url); }
+  }
+
+  /* ---------- 1:1 cropping ---------- */
+  function uncroppedIds(list) {
+    const out = [];
+    for (const i of list || items.values()) for (const pid of i.photoIds || []) if (!cropped.get(pid)) out.push(pid);
+    return out;
+  }
+  /** Crop one photo in place (the original is kept so it can be re-cropped). Resolves "saved" | "skipped" | "cancelled". */
+  async function cropPhoto(pid, opts) {
+    const rec = await Store.getPhoto(pid);
+    if (!rec) return "skipped";
+    const res = await Cropper.open(rec.orig || rec.blob, opts);
+    if (!res) return "cancelled";
+    if (res.skip) return "skipped";
+    await Store.putPhoto({ ...rec, orig: rec.orig || rec.blob, blob: res.blob, cropped: true });
+    cropped.set(pid, true); dropThumb(pid);
+    return "saved";
+  }
+  /** Walk through several photos. Resolves how many were saved. */
+  async function cropQueue(pids, label) {
+    let saved = 0;
+    for (let k = 0; k < pids.length; k++) {
+      const owner = [...items.values()].find(i => (i.photoIds || []).includes(pids[k])) || editing;
+      const name = owner && (owner.name || owner.upc) || "";
+      const r = await cropPhoto(pids[k], {
+        title: name ? "Crop: " + name : "Crop photo",
+        progress: pids.length > 1 ? `${label || "Photo"} ${k + 1} of ${pids.length}` : "",
+        hasNext: k < pids.length - 1
+      });
+      if (r === "cancelled") break;
+      if (r === "saved") saved++;
+    }
+    render();
+    if (editing && !$("sheetBg").hidden) renderPhotos();
+    return saved;
   }
 
   /* ---------- render ---------- */
@@ -66,6 +104,10 @@
     $("pendingBar").hidden = !retryable.length;
     $("pendingMsg").textContent = retryable.length + (retryable.length === 1 ? " item has" : " items have") + " no name yet" +
       (Lookup.hasExtraSources() ? "" : ". More sources in Settings");
+
+    const toCrop = uncroppedIds(all).length;
+    $("cropBar").hidden = !toCrop;
+    $("cropMsg").textContent = toCrop + (toCrop === 1 ? " photo needs" : " photos need") + " a square crop for the PDF catalog";
 
     const q = $("q").value.trim().toLowerCase();
     const shown = all.filter(i => !q || [i.name, i.upc, i.notes, i.condition].join(" ").toLowerCase().includes(q))
@@ -419,14 +461,32 @@
   async function renderPhotos() {
     const box = $("fPhotos"); box.textContent = "";
     if (!editing.photoIds.length) { box.innerHTML = '<span class="hint">No photos yet.</span>'; return; }
+    const pending = editing.photoIds.filter(p => !cropped.get(p)).length;
+    if (pending) {
+      const h = document.createElement("p"); h.className = "hint ph-hint";
+      h.textContent = "Tap a photo to crop it square. The first photo is the one used in the PDF catalog.";
+      box.append(h);
+    }
     for (const pid of editing.photoIds) {
-      const d = document.createElement("div"); d.className = "ph";
+      const d = document.createElement("div"); d.className = "ph" + (cropped.get(pid) ? "" : " uncropped");
       const img = Object.assign(document.createElement("img"), { alt: "Item photo" });
       thumbUrl(pid).then(u => { img.src = u; });
-      const x = Object.assign(document.createElement("button"), { type: "button", textContent: "✕" });
+      img.onclick = async () => { await cropQueue([pid]); };
+      const x = Object.assign(document.createElement("button"), { type: "button", textContent: "✕", className: "ph-del" });
       x.setAttribute("aria-label", "Remove photo");
       x.onclick = () => { editing.photoIds = editing.photoIds.filter(p => p !== pid); editing.removed.push(pid); renderPhotos(); };
-      d.append(img, x); box.append(d);
+      d.append(img, x);
+      const tag = document.createElement("span");
+      if (!cropped.get(pid)) { tag.className = "ph-tag warn"; tag.textContent = "Tap to crop"; }
+      else if (editing.photoIds[0] === pid) { tag.className = "ph-tag"; tag.textContent = "Main"; }
+      if (tag.textContent) d.append(tag);
+      if (editing.photoIds[0] !== pid) {
+        const star = Object.assign(document.createElement("button"), { type: "button", textContent: "★", className: "ph-main" });
+        star.setAttribute("aria-label", "Use as main photo");
+        star.onclick = () => { editing.photoIds = [pid, ...editing.photoIds.filter(p => p !== pid)]; renderPhotos(); };
+        d.append(star);
+      }
+      box.append(d);
     }
   }
   $("addCam").onclick = () => $("phCam").click();
@@ -435,10 +495,12 @@
   $("phFile").onchange = e => addPhotos(e.target);
   async function addPhotos(input) {
     const files = [...(input.files || [])]; input.value = "";
+    const fresh = [];
     for (const f of files) {
-      try { const pid = await storePhoto(f, editing.id); editing.photoIds.push(pid); editing.added.push(pid); renderPhotos(); }
+      try { const pid = await storePhoto(f, editing.id); editing.photoIds.push(pid); editing.added.push(pid); fresh.push(pid); renderPhotos(); }
       catch (e) { toast(e.message || "Couldn't add that photo."); }
     }
+    if (fresh.length) await cropQueue(fresh, "New photo");
   }
   $("lookupBtn").onclick = async () => {
     const upc = Lookup.canonical($("fUpc").value.trim());
@@ -492,10 +554,13 @@
   $("delYes").onclick = () => { const id = editing.id; closeSheet(); remove(id); toast("Item deleted"); };
 
   /* ---------- export ---------- */
+  function sortedItems() {
+    return [...items.values()].sort((a, b) => (!a.name - !b.name) || (a.name || "").localeCompare(b.name || "") || (a.upc || "").localeCompare(b.upc || ""));
+  }
   function csvText() {
     const esc = v => { v = v == null ? "" : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     const rows = [["UPC", "Item Name", "Quantity", "Condition", "Est. Price Each", "Est. Total", "Notes", "Photos", "Name Source"]];
-    const sorted = [...items.values()].sort((a, b) => (!a.name - !b.name) || (a.name || "").localeCompare(b.name || "") || (a.upc || "").localeCompare(b.upc || ""));
+    const sorted = sortedItems();
     for (const i of sorted) {
       const p = +i.price || 0, has = i.price !== "" && i.price != null;
       // ="..." keeps Excel from dropping leading zeros or using scientific notation
@@ -522,7 +587,7 @@
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(u), 30000);
   }
-  const stamp = () => new Date().toISOString().slice(0, 10);
+  const stamp = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
   $("exportCsv").onclick = () => {
     if (!items.size) { toast("Nothing to export yet."); return; }
     deliver(new Blob([csvText()], { type: "text/csv" }), `storage-inventory-${stamp()}.csv`, "text/csv");
@@ -535,15 +600,15 @@
       const out = [];
       const used = new Set();
       for (const i of items.values()) {
-        const files = [];
+        const files = [], flags = [];
         let n = 1;
         for (const pid of i.photoIds || []) {
           const rec = await Store.getPhoto(pid);
           if (!rec) continue;
           let fname; do { fname = `photos/${slug(i.name || i.upc)}-${n++}.jpg`; } while (used.has(fname));
-          used.add(fname); zip.file(fname, rec.blob); files.push(fname);
+          used.add(fname); zip.file(fname, rec.blob); files.push(fname); flags.push(!!rec.cropped);
         }
-        out.push({ ...i, photoFiles: files });
+        out.push({ ...i, photoFiles: files, photoCropped: flags });
       }
       zip.file("inventory.csv", csvText());
       zip.file("inventory.json", JSON.stringify({ app: "storage-inventory", version: APP_VERSION, exportedAt: new Date().toISOString(), items: out }, null, 1));
@@ -554,6 +619,42 @@
     } catch (e) { toast("Backup failed: " + (e.message || e)); }
     finally { b.disabled = false; b.textContent = "Backup (ZIP + photos)"; }
   };
+
+  /* ---------- PDF catalog ---------- */
+  $("cropAll").onclick = async () => {
+    const ids = uncroppedIds();
+    if (ids.length) await cropQueue(ids);
+  };
+  $("exportPdf").onclick = async () => {
+    if (!items.size) { toast("Nothing to export yet."); return; }
+    const need = uncroppedIds();
+    if (need.length) {
+      $("pdfGateMsg").textContent = `${need.length} ${need.length === 1 ? "photo hasn't" : "photos haven't"} been cropped square yet. The catalog needs every photo cropped first.`;
+      $("pdfGateBg").hidden = false;
+      return;
+    }
+    await buildPdf();
+  };
+  $("pdfGateCancel").onclick = () => { $("pdfGateBg").hidden = true; };
+  $("pdfGateCrop").onclick = async () => {
+    $("pdfGateBg").hidden = true;
+    await cropQueue(uncroppedIds());
+    const left = uncroppedIds().length;
+    if (left) toast(`${left} ${left === 1 ? "photo is" : "photos are"} still uncropped. Export PDF needs them all.`);
+    else toast("All photos cropped", "Export PDF", () => buildPdf(), 10000);
+  };
+  async function buildPdf() {
+    const b = $("exportPdf"); b.disabled = true; b.innerHTML = '<span class="spin"></span> Building';
+    try {
+      const list = sortedItems();
+      const blob = await Catalog.build(list, Store.getPhoto, {
+        version: APP_VERSION,
+        onProgress: (d, t) => { b.innerHTML = `<span class="spin"></span> ${d} / ${t}`; }
+      });
+      await deliver(blob, `storage-inventory-catalog-${stamp()}.pdf`, "application/pdf");
+    } catch (e) { toast("PDF failed: " + (e.message || e)); }
+    finally { b.disabled = false; b.textContent = "Export PDF catalog"; }
+  }
 
   /* ---------- import ---------- */
   $("importBtn").onclick = () => $("importFile").click();
@@ -567,12 +668,15 @@
       let added = 0, updated = 0;
       for (const raw of data.items || []) {
         const photoIds = [];
-        for (const pf of raw.photoFiles || []) {
-          const zf = zip.file(pf); if (!zf) continue;
+        const files = raw.photoFiles || [];
+        for (let k = 0; k < files.length; k++) {
+          const zf = zip.file(files[k]); if (!zf) continue;
           const blob = new Blob([await zf.async("arraybuffer")], { type: "image/jpeg" });
-          const pid = newId("p-"); await Store.putPhoto({ id: pid, itemId: raw.id, blob, at: now() }); photoIds.push(pid);
+          const isCropped = !!(raw.photoCropped && raw.photoCropped[k]);
+          const pid = newId("p-"); await Store.putPhoto({ id: pid, itemId: raw.id, blob, at: now(), cropped: isCropped }); photoIds.push(pid);
+          cropped.set(pid, isCropped);
         }
-        const { photoFiles, ...rest } = raw;
+        const { photoFiles, photoCropped, ...rest } = raw;
         const ex = items.get(raw.id);
         if (ex) { updated++; for (const pid of ex.photoIds || []) { await Store.deletePhoto(pid).catch(() => {}); dropThumb(pid); } } else added++;
         await save({ ...rest, photoIds }, { silent: true });
@@ -638,6 +742,7 @@
     try {
       const all = await Store.allItems();
       items = new Map(all.map(i => [i.id, i.lookup === "pending" ? { ...i, lookup: "error" } : i]));
+      cropped = await Store.photoFlags();
     } catch (e) {
       $("list").innerHTML = '<div class="empty"><strong>Storage unavailable</strong><span>Private Browsing blocks saving. Open the app in a normal Safari tab.</span></div>';
       return;
@@ -648,5 +753,5 @@
   }
   boot();
 
-  window.__app = { addOne, items: () => items, csvText, scan }; // for debugging from the console
+  window.__app = { addOne, items: () => items, csvText, scan, cropped: () => cropped, buildPdf }; // for debugging from the console
 })();

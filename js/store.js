@@ -45,6 +45,11 @@
     getLookup: upc => tx("lookups", "readonly", s => s.get(upc)),
     putLookup: rec => tx("lookups", "readwrite", s => s.put(rec)),
     clearLookups: () => tx("lookups", "readwrite", s => s.clear()),
+    /** id -> cropped flag for every stored photo (blobs aren't read). */
+    async photoFlags() {
+      const all = await tx("photos", "readonly", s => s.getAll());
+      return new Map((all || []).map(r => [r.id, !!r.cropped]));
+    },
     async clearAll() {
       await tx("items", "readwrite", s => s.clear());
       await tx("photos", "readwrite", s => s.clear());

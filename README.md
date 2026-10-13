@@ -13,6 +13,8 @@ Hosted as a static site on GitHub Pages: no build step, no server.
 - Name lookup: Open Library and Google Books for ISBNs (TTRPG books), Open Food / Beauty / Products / Pet Food Facts (free, no key), plus optional UPCitemdb (via your own Cloudflare Worker), Go-UPC, or EAN-Search
 - Per-item condition, estimated price, notes, photos (camera or library)
 - Search UPC on Google and eBay sold-price links per item
+- 1:1 photo cropper (drag, pinch/slider zoom, rotate 90°); works on photos already saved, and re-crops from the original
+- PDF catalog export: US Letter, 10 items per page (2 x 5), each item's main photo with name, UPC/ISBN, qty, condition, price and notes; requires every photo to be cropped first
 - CSV export (Excel-safe UPCs) and full ZIP backup/restore including photos
 - Installable to the Home Screen; opens with no signal
 
@@ -26,8 +28,10 @@ Hosted as a static site on GitHub Pages: no build step, no server.
 | `js/decode-worker.js` | Barcode decoding off the main thread |
 | `js/lookup.js` | UPC normalization and name lookups |
 | `js/store.js` | IndexedDB storage |
+| `js/cropper.js` | Square photo cropper |
+| `js/catalog.js` | PDF catalog builder |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline support and Home Screen install |
-| `vendor/` | zxing-wasm 3.1.4 (zxing-cpp barcode reader) and JSZip 3.10.1, vendored so the app works offline |
+| `vendor/` | zxing-wasm 3.1.4 (zxing-cpp barcode reader), JSZip 3.10.1 and jsPDF 4.2.1, vendored so the app works offline |
 | `worker/upc-proxy.js` | Optional Cloudflare Worker for UPCitemdb lookups |
 
 ## Data safety
