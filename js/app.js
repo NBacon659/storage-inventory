@@ -1,6 +1,6 @@
 /* Storage Inventory: UI, scanning flow, editing, export/backup. */
 (function () {
-  const APP_VERSION = "1.1.0";
+  const APP_VERSION = "1.1.1";
   const $ = id => document.getElementById(id);
   const LS_BACKUP = "si-backup-state";
   const LS_BANNER = "si-banner-dismissed";
@@ -634,6 +634,7 @@
 
   /* ---------- boot ---------- */
   async function boot() {
+    $("appVer").textContent = "v" + APP_VERSION;
     try {
       const all = await Store.allItems();
       items = new Map(all.map(i => [i.id, i.lookup === "pending" ? { ...i, lookup: "error" } : i]));

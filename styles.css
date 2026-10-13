@@ -23,6 +23,8 @@ h1{font-family:var(--display);font-weight:700;font-stretch:condensed;font-size:3
 h1 small{display:block;font-family:var(--body);font-weight:600;font-size:12px;letter-spacing:.08em;color:var(--muted);margin-bottom:4px}
 h2{font-family:var(--display);font-stretch:condensed;font-size:24px;text-transform:uppercase;margin:0}
 h3{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0}
+.title{display:flex;flex-direction:column;gap:4px;min-width:0}
+.app-ver{font-family:var(--mono);font-size:11px;color:var(--muted)}
 .totals{display:grid;grid-template-columns:repeat(3,1fr);background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
 .totals div{padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
 .totals div+div{border-left:1px solid var(--line)}
